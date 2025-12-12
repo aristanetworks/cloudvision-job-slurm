@@ -1,0 +1,25 @@
+[Unit]
+Description=CloudVision Slurm Node Inventory Monitor
+Documentation=https://github.com/aristanetworks/cloudvision-job-slurm
+After=network.target slurmctld.service
+Requires=slurmctld.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 10
+ExecStart=/opt/slurm/cloudvision/cv-node-inventory.py --monitor
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Run as root to bypass Slurm account requirements
+# User=slurm
+# Group=slurm
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+[Install]
+WantedBy=multi-user.target
+

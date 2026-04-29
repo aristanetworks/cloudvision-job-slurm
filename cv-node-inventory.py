@@ -22,8 +22,9 @@ from typing import Any, Dict, List, Set
 
 # Import shared CloudVision API utilities
 try:
-    from cv_api import send_nodeconfig, delete_nodeconfig
+    from cv_api import NODECONFIG_ENDPOINT, send_nodeconfig, delete_nodeconfig
 except ImportError:
+    NODECONFIG_ENDPOINT = "/api/resources/computejob/v1/NodeConfig"
     send_nodeconfig = None
     delete_nodeconfig = None
 
@@ -41,7 +42,7 @@ IFACE_NAME_REGEX = r"^(eth|eno|ens|enp|em).*"  # Regex matching common physical 
 INTERFACE_DISCOVERY_JOB_NAME = "cv-interface-discovery"  # Job name for srun interface discovery job
 
 # Setup logging
-logger = logging.getLogger("cv-node-monitor")
+logger = logging.getLogger("cv-node-inventory")
 
 
 def setup_logging(debug: bool = False) -> None:
@@ -307,6 +308,42 @@ def send_nodeconfig_for_node(node_data: Dict[str, Any]) -> bool:
     )
 
 
+def print_nodeconfig_dry_run(node_data: Dict[str, Any]) -> bool:
+    """Print the NodeConfig POST URL and JSON payload without sending it.
+
+    Mirrors the payload shape built by cv_api.send_nodeconfig so what's
+    printed matches what would actually be sent.
+    """
+    node_name = node_data.get("node_name")
+    location = node_data.get("location")
+    interfaces = node_data.get("interfaces", [])
+
+    if not node_name:
+        logger.error("Missing node_name in node_data")
+        return False
+
+    payload = {
+        "key": {
+            "id": node_name
+        },
+        "location": location,
+        "hostname": node_name,
+        "data_interfaces": {
+            "values": [{
+                "name": iface.get("name"),
+                "mac_address": iface.get("mac_address"),
+                "ip_addresses": {
+                    "values": iface.get("ip_addresses") or [],
+                },
+            } for iface in interfaces],
+        },
+    }
+    url = f"https://{API_SERVER}{NODECONFIG_ENDPOINT}"
+    print(f"POST {url}")
+    print(json.dumps(payload, indent=2))
+    return True
+
+
 def delete_nodeconfig_for_node(node_name: str) -> bool:
     """Delete NodeConfig from CloudVision API.
 
@@ -455,13 +492,17 @@ def monitor_nodes(poll_interval: int, debug: bool = False) -> None:
         previous_available_nodes = current_available_set
 
 
-def run_once(debug: bool = False) -> None:
+def run_once(debug: bool = False, dry_run: bool = False) -> None:
     """Run node inventory collection once and exit.
 
     Args:
         debug: Whether to enable debug logging
+        dry_run: If True, print payloads instead of POSTing to CloudVision.
     """
-    logger.info("Running one-time node inventory collection...")
+    if dry_run:
+        logger.info("Running one-time node inventory collection (DRY RUN)...")
+    else:
+        logger.info("Running one-time node inventory collection...")
 
     cluster_name = get_cluster_name()
     logger.info("Cluster name: %s", cluster_name)
@@ -480,17 +521,23 @@ def run_once(debug: bool = False) -> None:
     logger.info("Collecting from %d available nodes...", len(available_nodes))
     node_data_list = collect_from_nodes(available_nodes, cluster_name, debug)
 
-    # Send NodeConfig for all nodes
+    handler = print_nodeconfig_dry_run if dry_run else send_nodeconfig_for_node
+
+    # Send (or print) NodeConfig for all nodes
     success_count = 0
     failure_count = 0
     for node_data in node_data_list:
-        if send_nodeconfig_for_node(node_data):
+        if handler(node_data):
             success_count += 1
         else:
             failure_count += 1
 
-    logger.info("Inventory complete: %d succeeded, %d failed", success_count,
-                failure_count)
+    if dry_run:
+        logger.info("Dry run complete: %d printed, %d failed", success_count,
+                    failure_count)
+    else:
+        logger.info("Inventory complete: %d succeeded, %d failed",
+                    success_count, failure_count)
 
     if failure_count > 0:
         sys.exit(1)
@@ -498,6 +545,7 @@ def run_once(debug: bool = False) -> None:
 
 def main() -> None:
     """Main entry point."""
+    global API_SERVER, API_TOKEN
     parser = argparse.ArgumentParser(
         description=
         "Collect Slurm node inventory and update CloudVision NodeConfig")
@@ -520,23 +568,60 @@ def main() -> None:
         help=
         f"Seconds between node checks in monitor mode (default: {POLL_INTERVAL})",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=
+        "Print the NodeConfig URL and JSON payload for each node instead of "
+        "POSTing to CloudVision. API_TOKEN is not required. Not compatible "
+        "with --monitor.",
+    )
+    # Credentials precedence: --api-server / --api-token flag, then
+    # CV_API_SERVER / CV_API_TOKEN env vars, then the in-file constants
+    # (set by `make install`). The fallback keeps the systemd service path
+    # working unchanged.
+    parser.add_argument(
+        "--api-server",
+        default=os.environ.get("CV_API_SERVER", API_SERVER),
+        help="CloudVision API server (env: CV_API_SERVER, "
+        "default: in-file API_SERVER)",
+    )
+    parser.add_argument(
+        "--api-token",
+        default=os.environ.get("CV_API_TOKEN", API_TOKEN),
+        help="CloudVision API token (env: CV_API_TOKEN, "
+        "default: in-file API_TOKEN)",
+    )
     args = parser.parse_args()
 
     setup_logging(debug=args.debug)
 
-    # Verify API configuration
-    if not API_SERVER or not API_TOKEN:
+    if args.dry_run and args.monitor:
+        logger.error("--dry-run cannot be combined with --monitor")
+        sys.exit(2)
+
+    # Resolve credentials and override the module globals so the
+    # send_/delete_/print_ helpers (which read these globals) pick them up.
+    API_SERVER = args.api_server
+    API_TOKEN = args.api_token
+
+    if not API_SERVER:
         logger.error(
-            "API_SERVER and API_TOKEN must be configured in the script")
-        logger.error("Edit %s and set API_SERVER and API_TOKEN values",
-                     __file__)
+            "API_SERVER is required. Pass --api-server, set CV_API_SERVER, "
+            "or edit the in-file API_SERVER constant.")
+        sys.exit(1)
+    if not API_TOKEN and not args.dry_run:
+        logger.error(
+            "API_TOKEN is required (omit only with --dry-run). Pass "
+            "--api-token, set CV_API_TOKEN, or edit the in-file API_TOKEN "
+            "constant.")
         sys.exit(1)
 
     try:
         if args.monitor:
             monitor_nodes(args.poll_interval, debug=args.debug)
         else:
-            run_once(debug=args.debug)
+            run_once(debug=args.debug, dry_run=args.dry_run)
     except KeyboardInterrupt:
         logger.info("Received interrupt signal, shutting down...")
         sys.exit(0)

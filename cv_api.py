@@ -44,7 +44,7 @@ def send_jobconfig(api_server: str,
                    nodes: Optional[List[str]] = None,
                    interfaces: Optional[List[str]] = None,
                    jobconfig_mode: str = 'interface',
-                   isTenantJob: bool = False) -> bool:
+                   job_type: Optional[str] = None) -> bool:
     """Build and send a JobConfig payload to CloudVision.
 
     Args:
@@ -64,7 +64,10 @@ def send_jobconfig(api_server: str,
                    is running. Use when only partial interfaces per compute node
                    are allocated to the job. Required when jobconfig_mode='interface'.
         jobconfig_mode: 'node' or 'interface' - determines which field to populate
-        isTenantJob: If True, marks the job as a tenant type job
+        job_type: Optional CloudVision JobConfig type string (e.g.,
+                  "JOB_TYPE_TENANT" for tenant scheduler allocations or
+                  "JOB_TYPE_CONFIGURED" for manually-sent jobs). When omitted,
+                  the field is left unset and CloudVision applies its default.
     Returns:
         True on HTTP 2xx, False otherwise.
     """
@@ -114,9 +117,8 @@ def send_jobconfig(api_server: str,
             return False
         job_data["end_time"] = end_time
 
-    # Add job type if this is a tenant type job used by a tenant scheduler
-    if isTenantJob:
-        job_data["type"] = "JOB_TYPE_TENANT"
+    if job_type:
+        job_data["type"] = job_type
 
     # Construct API endpoint
     api_endpoint = f"https://{api_server}{JOBCONFIG_ENDPOINT}"

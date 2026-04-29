@@ -259,6 +259,36 @@ If you prefer manual installation or need more control over the installation pro
   - View logs with: `journalctl -u cv-node-inventory.service -f`
 - **One-time mode** (script default when run manually without flags): If a single node fails to report NodeConfig, the script logs a warning and continues processing the remaining nodes. Exits with code 1 if any failures occurred.
 
+## Manual Workflows
+
+The `make install` workflow above wires up the *automated* integration (Slurm hooks + node-monitor systemd service). For one-off manual operations — backfilling a single job, sending NodeConfig on demand, or previewing what would be sent — clone the repo and run the two scripts below directly on the Slurm controller node. They do **not** require `make install`; they only need Python 3 with `requests` installed and access to the Slurm CLI tools (`scontrol`, `sacct`, `sinfo`, `srun`).
+
+Both scripts support `--dry-run`, which prints the request URL and JSON payload to stdout instead of contacting CloudVision. `--dry-run` does not require an API token.
+
+### Send a single Slurm job — `cv-job-send.py`
+
+Reports any single Slurm job by ID. Looks the job up via `scontrol show job <id>` (running / still-tracked jobs), falls back to `sacct -j <id>` for finished jobs, and posts the same JobConfig payload that `cv-job-hook.py` would send.
+
+```bash
+# Send a job
+./cv-job-send.py 12345 --api-server www.arista.io --api-token <token>
+
+# Print URL + JSON without sending
+./cv-job-send.py 12345 --api-server www.arista.io --dry-run
+```
+
+### Send NodeConfig for all nodes — `cv-node-inventory.py`
+
+When invoked without `--monitor`, the same script that powers the systemd service runs its one-time path: query `sinfo`, `srun interface_discovery.py` on each available node, and send NodeConfig for each. `--dry-run` prints the payloads instead.
+
+```bash
+# One-time send for every available node
+./cv-node-inventory.py --api-server www.arista.io --api-token <token>
+
+# Print URL + payload for every node, no API call
+./cv-node-inventory.py --api-server www.arista.io --dry-run
+```
+
 ## Data Sent to CloudVision
 
 **JobConfig (from `cv-job-hook.py`):**
@@ -373,7 +403,7 @@ If you prefer manual installation or need more control over the installation pro
 
 > **Note:** This section describes an alternative use case for HPC-as-a-Service providers integrating tenant schedulers with CloudVision. This is separate from the regular Slurm job monitoring described above.
 
-The `send_jobconfig()` API utility function in `cv_api.py` supports a tenant mode (`isTenantJob=True`) for reporting tenant allocations to CloudVision. Tenant allocations appear on the **CloudVision Tenant Dashboard** (separate from the regular Job Dashboard).
+The `send_jobconfig()` API utility function in `cv_api.py` supports a tenant mode (`job_type="JOB_TYPE_TENANT"`) for reporting tenant allocations to CloudVision. Tenant allocations appear on the **CloudVision Tenant Dashboard** (separate from the regular Job Dashboard).
 
 **Use Case:**
 - HPC-as-a-Service or GPU-as-a-Service providers with multi-tenant schedulers
@@ -384,9 +414,9 @@ The `send_jobconfig()` API utility function in `cv_api.py` supports a tenant mod
 
 Tenant schedulers must call `send_jobconfig()` directly at these lifecycle points:
 
-1. **Tenant Allocation**: Call with `job_state='JOB_STATE_RUNNING'` and `isTenantJob=True`
+1. **Tenant Allocation**: Call with `job_state='JOB_STATE_RUNNING'` and `job_type='JOB_TYPE_TENANT'`
 2. **Resource Change**: Call with updated `nodes` or `interfaces` when tenant resources scale
-3. **Tenant Deallocation**: Call with `job_state='JOB_STATE_COMPLETED'` and `isTenantJob=True`
+3. **Tenant Deallocation**: Call with `job_state='JOB_STATE_COMPLETED'` and `job_type='JOB_TYPE_TENANT'`
 
 **Example Integration:**
 
@@ -404,7 +434,7 @@ send_jobconfig(
     nodes=["compute-node-1", "compute-node-2"],
     start_time="2025-12-05T10:30:00Z",
     jobconfig_mode="node",
-    isTenantJob=True
+    job_type="JOB_TYPE_TENANT"
 )
 
 # When tenant allocation ends
@@ -419,7 +449,7 @@ send_jobconfig(
     start_time="2025-12-05T10:30:00Z",
     end_time="2025-12-06T18:00:00Z",
     jobconfig_mode="node",
-    isTenantJob=True
+    job_type="JOB_TYPE_TENANT"
 )
 ```
 

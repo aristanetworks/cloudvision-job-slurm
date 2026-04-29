@@ -159,7 +159,7 @@ install: ## Install CloudVision Slurm integration (requires API_SERVER, API_TOKE
 	@echo "=========================================="
 	@echo ""
 	@echo "Node inventory service status:"
-	@bash -c 'systemctl is-active $(NODE_INVENTORY_SERVICE) >/dev/null 2>&1 && echo "  ✓ cv-node-inventory.service is running" || echo "  ⚠ cv-node-inventory.service is not running"'
+	@bash -c 'systemctl is-active $(NODE_INVENTORY_SERVICE) >/dev/null 2>&1 && echo "  ✓ $(NODE_INVENTORY_SERVICE) is running" || echo "  ⚠ $(NODE_INVENTORY_SERVICE) is not running"'
 
 .PHONY: uninstall
 uninstall: ## Uninstall CloudVision Slurm integration
@@ -216,12 +216,6 @@ uninstall: ## Uninstall CloudVision Slurm integration
 	@echo "=========================================="
 	@echo "✓ Uninstall Complete!"
 	@echo "=========================================="
-
-.PHONY: update-node-inventory
-update-node-inventory: ## Run node inventory collection once and send to CloudVision
-	@test -f "$(INSTALL_DIR)/$(NODE_INVENTORY_SCRIPT)" || (echo "Error: $(NODE_INVENTORY_SCRIPT) not installed. Run 'make install' first." && exit 1)
-	@echo "Running one-time node inventory collection..."
-	@$(INSTALL_DIR)/$(NODE_INVENTORY_SCRIPT)
 
 .DEFAULT_GOAL := help
 
